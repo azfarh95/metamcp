@@ -1,4 +1,10 @@
-# 🚀 MetaMCP (MCP Aggregator, Orchestrator, Middleware, Gateway in one docker) <!-- omit in toc -->
+# 🚀 MetaMCP — Sentinel fork <!-- omit in toc -->
+
+> **This is a Sentinel-customized fork** of [metatool-ai/metamcp](https://github.com/metatool-ai/metamcp), used by the [Sentinel Stack](https://github.com/azfarh95/sentinel-stack-public). The deployed image at `ghcr.io/azfarh95/metamcp:v2.4.22-sentinel-20260510` is built from this branch. See [SENTINEL_FORK.md](./SENTINEL_FORK.md) for what differs from upstream. Original upstream README below.
+
+---
+
+## MCP Aggregator, Orchestrator, Middleware, Gateway in one docker
 
 <div align="center">
 
