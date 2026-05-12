@@ -14,7 +14,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Push to a Sentinel-specific package name so the workflow's GITHUB_TOKEN
+  # has write access (the original `metamcp` package was pushed manually and
+  # isn't linked to this repo's Actions). The user can link the old package
+  # later if they want to consolidate.
+  IMAGE_NAME: ${{ github.repository_owner }}/sentinel-metamcp
 
 jobs:
   build-and-push:
