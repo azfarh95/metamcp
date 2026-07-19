@@ -107,14 +107,25 @@ export const configService = {
   },
 
   async getSessionLifetime(): Promise<number | null> {
+    // [sentinel-patch] Finite DEFAULT so a fresh / reset metamcp_db is not
+    // re-vulnerable to the 2026-07-20 pool-exhaustion leak: when SESSION_LIFETIME
+    // is unset the reaper is skipped (infinite sessions) → stale sessions
+    // accumulate until the connection cap → fresh clients get 0 tools. An explicit
+    // SESSION_LIFETIME config row still overrides this. Set
+    // METAMCP_DEFAULT_SESSION_LIFETIME_MS=0 to opt back into infinite sessions.
+    const DEFAULT_MS = Number(
+      process.env.METAMCP_DEFAULT_SESSION_LIFETIME_MS ?? 3600000,
+    );
+    const fallback =
+      Number.isFinite(DEFAULT_MS) && DEFAULT_MS > 0 ? DEFAULT_MS : null;
     const config = await configRepo.getConfig(
       ConfigKeyEnum.Enum.SESSION_LIFETIME,
     );
     if (!config?.value) {
-      return null; // No session lifetime set - infinite sessions
+      return fallback; // no explicit row → finite default (was: null = infinite)
     }
     const lifetime = parseInt(config.value, 10);
-    return isNaN(lifetime) ? null : lifetime;
+    return isNaN(lifetime) ? fallback : lifetime;
   },
 
   async setSessionLifetime(lifetime?: number | null): Promise<void> {

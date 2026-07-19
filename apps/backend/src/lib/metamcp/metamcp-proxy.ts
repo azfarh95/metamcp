@@ -48,6 +48,27 @@ import { parseToolName } from "./tool-name-parser";
 import { toolsSyncCache } from "./tools-sync-cache";
 import { sanitizeName } from "./utils";
 
+// [sentinel-patch] Per-member resilience: cap how long a single namespace member
+// may take to hand back a usable session during tools/list. A slow/hung member
+// (e.g. a cold cross-container connect, or a briefly-unreachable server) must not
+// stall the whole namespace's tools/list. On timeout that member simply
+// contributes no tools for THIS request; its underlying connect keeps running in
+// the background, so it warms up for the next request. Tunable via env.
+const MEMBER_SESSION_TIMEOUT_MS = Number(
+  process.env.METAMCP_MEMBER_SESSION_TIMEOUT_MS ?? 8000,
+);
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`member "${label}" timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Filter out tools that are overrides of existing tools to prevent duplicates in database
  * Uses the existing tool overrides cache for optimal performance
@@ -179,12 +200,26 @@ export const createServer = async (
           );
           return;
         }
-        const session = await mcpServerPool.getSession(
-          context.sessionId,
-          mcpServerUuid,
-          params,
-          namespaceUuid,
-        );
+        // [sentinel-patch] Bound the per-member session acquisition so one slow
+        // or unreachable member cannot stall the whole namespace's tools/list.
+        let session;
+        try {
+          session = await withTimeout(
+            mcpServerPool.getSession(
+              context.sessionId,
+              mcpServerUuid,
+              params,
+              namespaceUuid,
+            ),
+            MEMBER_SESSION_TIMEOUT_MS,
+            params.name || mcpServerUuid,
+          );
+        } catch (err) {
+          console.log(
+            `[DEBUG-TOOLS] ⏱️  Skipped "${params.name || mcpServerUuid}" for this tools/list (session not ready): ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return; // degrade gracefully: this member contributes no tools this request
+        }
         if (!session) {
           console.log(`[DEBUG-TOOLS] ❌ No session for: ${params.name}`);
           return;

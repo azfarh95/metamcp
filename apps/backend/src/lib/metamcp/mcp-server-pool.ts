@@ -54,10 +54,22 @@ export class McpServerPool {
 
   private constructor(
     defaultIdleCount: number = 1,
-    maxTotalConnections: number = 100,
+    // [sentinel-patch] Env-configurable connection cap. The old hardcoded 100 was
+    // undersized for this deployment (5 namespaces × ~30 servers + idle re-warm +
+    // multiple concurrent clients) and, combined with a disabled session reaper,
+    // exhausted at 113/100 → fresh clients refused → namespace served 0 tools
+    // (root cause of the 2026-07-20 "0-tools-on-fresh-client" incident). Reaper is
+    // now enabled via SESSION_LIFETIME; this raises the ceiling for headroom and
+    // makes it tunable without a rebuild. Default 300.
+    maxTotalConnections: number = Number(
+      process.env.METAMCP_MAX_CONNECTIONS ?? 300,
+    ),
   ) {
     this.defaultIdleCount = defaultIdleCount;
-    this.maxTotalConnections = maxTotalConnections;
+    this.maxTotalConnections =
+      Number.isFinite(maxTotalConnections) && maxTotalConnections > 0
+        ? maxTotalConnections
+        : 300;
     this.startCleanupTimer();
   }
 

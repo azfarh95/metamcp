@@ -85,6 +85,25 @@ export async function initializeIdleServers() {
       console.log(
         "✅ Successfully initialized idle MCP server pool sessions for ALL servers",
       );
+
+      // [sentinel-patch] Keep idle sessions warm. The ensureIdleSessions above
+      // runs ONCE at startup; sessions then get consumed (converted to active) or
+      // die when a member briefly blips, and are not always replaced — leaving a
+      // cold pool that forces the next client to pay full cold-connect on
+      // tools/list (the ~9s stall a fresh container client hit). Periodically top
+      // the pool back up. ensureIdleSessions is idempotent + connection-limited,
+      // so this only (re)creates what is actually missing. Tunable via env.
+      // NOTE: re-warms the startup server set; servers added later are covered by
+      // ensureIdleSessionForNewServer on their own add path.
+      const REWARM_MS = Number(process.env.METAMCP_IDLE_REWARM_MS ?? 60000);
+      if (REWARM_MS > 0) {
+        setInterval(() => {
+          void mcpServerPool
+            .ensureIdleSessions(allServerParams)
+            .catch((e) => console.log("⚠️ idle-session re-warm failed:", e));
+        }, REWARM_MS).unref();
+        console.log(`✅ Idle-session re-warm scheduled every ${REWARM_MS}ms`);
+      }
     }
 
     // Ensure idle servers for all namespaces (MetaMCP server pool)
