@@ -63,8 +63,13 @@ LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="MetaMCP"
 LABEL org.opencontainers.image.vendor="metatool-ai"
 
-# Install curl for health checks
-RUN apt-get update && apt-get install -y curl postgresql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install curl for health checks, plus chromium + xvfb so STDIO MCP children
+# that launch a real (non-headless) browser -- e.g. donsetch's ghost-browser
+# bot-wall-bypass tier -- have one to find in-container. Without this, those
+# children fail cleanly with "no chromium/chrome binary found" instead of
+# silently degrading; installing it here is what actually lets that tier run.
+# Sentinel patch, not upstream.
+RUN apt-get update && apt-get install -y curl postgresql-client chromium xvfb && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user with proper home directory
 RUN addgroup --system --gid 1001 nodejs
