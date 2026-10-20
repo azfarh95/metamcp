@@ -47,6 +47,9 @@ wait_for_postgres
 # Run migrations
 run_migrations
 
+# [sentinel-patch] Fill the npx cache before the backend spawns STDIO servers (never fails startup)
+sh ./docker-prewarm-npx.sh
+
 # Start backend in the background
 echo "Starting backend server..."
 cd /app/apps/backend
