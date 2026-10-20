@@ -97,9 +97,9 @@ RUN pnpm install --prod
 # Install drizzle-kit locally in backend for migrations
 RUN cd apps/backend && pnpm add drizzle-kit@0.31.1
 
-# Copy startup script
-COPY --chown=nextjs:nodejs docker-entrypoint.sh ./
-RUN chmod +x docker-entrypoint.sh
+# Copy startup scripts (docker-prewarm-npx.sh: sentinel patch, see its header)
+COPY --chown=nextjs:nodejs docker-entrypoint.sh docker-prewarm-npx.sh ./
+RUN chmod +x docker-entrypoint.sh docker-prewarm-npx.sh
 
 USER nextjs
 
