@@ -16,6 +16,7 @@ import {
   toolsTable,
 } from "../schema";
 import { namespaceMappingsRepository } from "./namespace-mappings.repo";
+import { buildServerMappings, MappingStatus } from "./namespace-server-status";
 
 export class NamespacesRepository {
   async create(input: NamespaceCreateInput): Promise<DatabaseNamespace> {
@@ -318,6 +319,19 @@ export class NamespacesRepository {
           existingToolStatusMap.set(mapping.tool_uuid, mapping.status);
         });
 
+        // Read existing server statuses inside the transaction, before the
+        // delete, so an INACTIVE server stays INACTIVE (sentinel-stack#128)
+        const existingServerMappings = await tx
+          .select({
+            mcp_server_uuid: namespaceServerMappingsTable.mcp_server_uuid,
+            status: namespaceServerMappingsTable.status,
+          })
+          .from(namespaceServerMappingsTable)
+          .where(eq(namespaceServerMappingsTable.namespace_uuid, input.uuid));
+        const existingServerStatusMap = new Map<string, MappingStatus>(
+          existingServerMappings.map((m) => [m.mcp_server_uuid, m.status]),
+        );
+
         // Delete existing server mappings
         await tx
           .delete(namespaceServerMappingsTable)
@@ -330,11 +344,11 @@ export class NamespacesRepository {
 
         // Create new server mappings if any servers are specified
         if (input.mcpServerUuids.length > 0) {
-          const serverMappings = input.mcpServerUuids.map((serverUuid) => ({
-            namespace_uuid: input.uuid,
-            mcp_server_uuid: serverUuid,
-            status: "ACTIVE" as const,
-          }));
+          const serverMappings = buildServerMappings(
+            input.uuid,
+            input.mcpServerUuids,
+            existingServerStatusMap,
+          );
 
           await tx.insert(namespaceServerMappingsTable).values(serverMappings);
 
