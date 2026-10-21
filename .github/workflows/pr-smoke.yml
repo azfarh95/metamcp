@@ -25,6 +25,8 @@ env:
 
 jobs:
   smoke:
+    # Persistent self-hosted runner: never run code from fork PRs on it.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [docker, lenovo260-metamcp-docker]
     timeout-minutes: 30
     defaults:

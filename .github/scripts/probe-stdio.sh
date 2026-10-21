@@ -11,7 +11,10 @@ rows=$(psql "$DATABASE_URL" -At -F '|' -c "
 [ -n "$rows" ] || { echo "probe: no npx STDIO servers found"; exit 1; }
 
 fail=0
-for row in $rows; do
+list=$(mktemp)
+printf '%s
+' "$rows" >"$list"
+while IFS= read -r row; do
     name=${row%%|*}
     args=${row#*|}
     out=$(mktemp)
@@ -24,7 +27,9 @@ for row in $rows; do
         printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
         sleep 8
     } | timeout 120 npx $args >"$out" 2>/dev/null
-    if grep -q '"id":2' "$out" && grep -q '"tools"' "$out"; then
+    # Judge only the id-2 reply: the initialize reply also mentions "tools" (capabilities).
+    reply=$(grep '"id":2' "$out")
+    if [ -n "$reply" ] && ! printf '%s' "$reply" | grep -q '"error"' && printf '%s' "$reply" | grep -q '"tools":\['; then
         echo "probe: $name OK ($(grep -o '"name"' "$out" | wc -l) name fields in reply)"
     else
         echo "probe: $name FAILED -- reply was:"
@@ -32,5 +37,6 @@ for row in $rows; do
         fail=1
     fi
     rm -f "$out"
-done
+done <"$list"
+rm -f "$list"
 exit $fail
