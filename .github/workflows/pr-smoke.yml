@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        shell: pwsh
+        shell: powershell
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -38,11 +38,13 @@ jobs:
 
       - name: Build image
         run: |
+          $ErrorActionPreference = 'Continue'  # 5.1 turns native stderr into terminating errors; exit codes are checked explicitly
           docker build -t $env:IMAGE .
           if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
 
       - name: Generate dummy .env.ci
         run: |
+          $ErrorActionPreference = 'Continue'  # 5.1 turns native stderr into terminating errors; exit codes are checked explicitly
           # Placeholder values only -- nothing here is a real secret.
           @(
             'POSTGRES_HOST=' + $env:PG
@@ -59,6 +61,7 @@ jobs:
 
       - name: Start Postgres and the app
         run: |
+          $ErrorActionPreference = 'Continue'  # 5.1 turns native stderr into terminating errors; exit codes are checked explicitly
           docker network create $env:NETWORK
           if ($LASTEXITCODE -ne 0) { throw "network create failed" }
           docker run -d --name $env:PG --network $env:NETWORK `
@@ -85,6 +88,7 @@ jobs:
 
       - name: Seed a STDIO server
         run: |
+          $ErrorActionPreference = 'Continue'  # 5.1 turns native stderr into terminating errors; exit codes are checked explicitly
           # The shipped DB starts empty, so register one npx STDIO server for prewarm and probe.
           $sql = "INSERT INTO mcp_servers (name, type, command, args) VALUES ('ci-memory', 'STDIO', 'npx', ARRAY['-y','@modelcontextprotocol/server-memory']);"
           $sql | docker exec -i $env:APP sh -c 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1'
@@ -92,12 +96,14 @@ jobs:
 
       - name: Run npx prewarm
         run: |
+          $ErrorActionPreference = 'Continue'  # 5.1 turns native stderr into terminating errors; exit codes are checked explicitly
           docker exec -w /app $env:APP sh -c 'METAMCP_NPX_PREWARM=true sh ./docker-prewarm-npx.sh' | Tee-Object -Variable out
           if ($LASTEXITCODE -ne 0) { throw "prewarm exited non-zero" }
           if (($out | Out-String) -notmatch 'ready \(') { throw "prewarm did not warm any package" }
 
       - name: Probe STDIO servers (tools/list)
         run: |
+          $ErrorActionPreference = 'Continue'  # 5.1 turns native stderr into terminating errors; exit codes are checked explicitly
           docker cp .github/scripts/probe-stdio.sh "$($env:APP):/tmp/probe-stdio.sh"
           if ($LASTEXITCODE -ne 0) { throw "docker cp failed" }
           docker exec $env:APP sh /tmp/probe-stdio.sh
@@ -106,12 +112,14 @@ jobs:
       - name: Dump logs on failure
         if: failure()
         run: |
+          $ErrorActionPreference = 'Continue'  # 5.1 turns native stderr into terminating errors; exit codes are checked explicitly
           docker logs --tail 200 $env:APP 2>&1
           docker logs --tail 50 $env:PG 2>&1
 
       - name: Tear down
         if: always()
         run: |
+          $ErrorActionPreference = 'Continue'  # 5.1 turns native stderr into terminating errors; exit codes are checked explicitly
           docker rm -f $env:APP $env:PG *> $null
           docker network rm $env:NETWORK *> $null
           docker rmi $env:IMAGE *> $null
