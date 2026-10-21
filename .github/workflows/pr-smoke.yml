@@ -1,0 +1,119 @@
+name: PR smoke test
+
+# Builds the image, boots it against a throwaway Postgres with placeholder-only config,
+# runs the npx prewarm and round-trips tools/list on each STDIO MCP server.
+# Runs on the Lenovo-260 Docker runner (Windows, non-admin ghdocker account).
+
+on:
+  pull_request:
+    branches:
+      - sentinel-patches
+  workflow_dispatch:
+
+concurrency:
+  group: pr-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: metamcp-ci:${{ github.run_id }}-${{ github.run_attempt }}
+  NETWORK: metamcp-ci-${{ github.run_id }}-${{ github.run_attempt }}
+  APP: metamcp-ci-app-${{ github.run_id }}-${{ github.run_attempt }}
+  PG: metamcp-ci-pg-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  smoke:
+    runs-on: [docker, lenovo260-metamcp-docker]
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: |
+          docker build -t $env:IMAGE .
+          if ($LASTEXITCODE -ne 0) { throw "docker build failed" }
+
+      - name: Generate dummy .env.ci
+        run: |
+          # Placeholder values only -- nothing here is a real secret.
+          @(
+            'POSTGRES_HOST=' + $env:PG
+            'POSTGRES_PORT=5432'
+            'POSTGRES_USER=ci_user'
+            'POSTGRES_PASSWORD=ci-placeholder-password'
+            'POSTGRES_DB=ci_db'
+            'DATABASE_URL=postgresql://ci_user:ci-placeholder-password@' + $env:PG + ':5432/ci_db'
+            'APP_URL=http://localhost:12008'
+            'NEXT_PUBLIC_APP_URL=http://localhost:12008'
+            'BETTER_AUTH_SECRET=ci-placeholder-not-a-secret-0000000000000000'
+            'METAMCP_NPX_PREWARM=false'
+          ) | Set-Content -Path "$env:RUNNER_TEMP/.env.ci" -Encoding ascii
+
+      - name: Start Postgres and the app
+        run: |
+          docker network create $env:NETWORK
+          if ($LASTEXITCODE -ne 0) { throw "network create failed" }
+          docker run -d --name $env:PG --network $env:NETWORK `
+            -e POSTGRES_USER=ci_user -e POSTGRES_PASSWORD=ci-placeholder-password -e POSTGRES_DB=ci_db `
+            postgres:16-alpine
+          if ($LASTEXITCODE -ne 0) { throw "postgres start failed" }
+          $ready = $false
+          foreach ($i in 1..30) {
+            docker exec $env:PG pg_isready -U ci_user -d ci_db *> $null
+            if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $ready) { throw "postgres never became ready" }
+          docker run -d --name $env:APP --network $env:NETWORK --env-file "$env:RUNNER_TEMP/.env.ci" $env:IMAGE
+          if ($LASTEXITCODE -ne 0) { throw "app start failed" }
+          # The entrypoint runs migrations, then starts backend and frontend.
+          $up = $false
+          foreach ($i in 1..60) {
+            if ((docker logs $env:APP 2>&1 | Out-String) -match 'Services started successfully') { $up = $true; break }
+            if ((docker inspect -f '{{.State.Running}}' $env:APP) -ne 'true') { throw "app container exited during startup" }
+            Start-Sleep -Seconds 3
+          }
+          if (-not $up) { throw "app never reported started" }
+
+      - name: Seed a STDIO server
+        run: |
+          # The shipped DB starts empty, so register one npx STDIO server for prewarm and probe.
+          $sql = "INSERT INTO mcp_servers (name, type, command, args) VALUES ('ci-memory', 'STDIO', 'npx', ARRAY['-y','@modelcontextprotocol/server-memory']);"
+          $sql | docker exec -i $env:APP sh -c 'psql "$DATABASE_URL" -v ON_ERROR_STOP=1'
+          if ($LASTEXITCODE -ne 0) { throw "seed failed" }
+
+      - name: Run npx prewarm
+        run: |
+          docker exec -w /app $env:APP sh -c 'METAMCP_NPX_PREWARM=true sh ./docker-prewarm-npx.sh' | Tee-Object -Variable out
+          if ($LASTEXITCODE -ne 0) { throw "prewarm exited non-zero" }
+          if (($out | Out-String) -notmatch 'ready \(') { throw "prewarm did not warm any package" }
+
+      - name: Probe STDIO servers (tools/list)
+        run: |
+          docker cp .github/scripts/probe-stdio.sh "$($env:APP):/tmp/probe-stdio.sh"
+          if ($LASTEXITCODE -ne 0) { throw "docker cp failed" }
+          docker exec $env:APP sh /tmp/probe-stdio.sh
+          if ($LASTEXITCODE -ne 0) { throw "STDIO probe failed" }
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker logs --tail 200 $env:APP 2>&1
+          docker logs --tail 50 $env:PG 2>&1
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker rm -f $env:APP $env:PG *> $null
+          docker network rm $env:NETWORK *> $null
+          docker rmi $env:IMAGE *> $null
+          Remove-Item -Force -ErrorAction SilentlyContinue "$env:RUNNER_TEMP/.env.ci"
+          exit 0
